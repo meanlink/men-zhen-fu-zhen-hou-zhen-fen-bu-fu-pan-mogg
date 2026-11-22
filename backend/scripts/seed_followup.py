@@ -2,10 +2,15 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 
-from src.models import AttendanceReason, AttendanceStatus, DepartmentSlot, ReviewReport, SampleStatus, WaitImprovement, WaitSample
-from src.schemas import AttendanceCreate, AttendanceDecision, ImprovementCreate
+from src.models import (
+    AttendanceReason, AttendanceStatus, DepartmentSlot, ImprovementEvaluationHistory,
+    ImprovementSlotClaim, ReviewReport, SampleStatus, User, WaitImprovement, WaitSample,
+)
+from src.schemas import AttendanceCreate, AttendanceDecision, EvaluationAction, ImprovementCreate, WithdrawalAction
 from src.services.attendance import attendance_for_sample, decide_attendance, submit_attendance
-from src.services.improvements import create_improvement
+from src.services.improvements import (
+    create_improvement, evaluate_improvement, list_evaluation_history, withdraw_evaluation,
+)
 from src.services.workflow import create_report, review_report
 
 
@@ -40,6 +45,7 @@ def seed_window(db, analyst, day, waits, extra_booking=False):
 
 
 def seed_followup(db, analyst, reviewer):
+    admin = db.scalar(select(User).where(User.username == "admin"))
     baseline = seed_window(db, analyst, 16, [20, 24, 28, 58], extra_booking=True)
     comparison = seed_window(db, analyst, 19, [17, 18, 22, 30])
     no_show = db.scalar(select(WaitSample).where(WaitSample.sample_code == "FU-1116-05"))
@@ -59,6 +65,65 @@ def seed_followup(db, analyst, reviewer):
             action_plan="将加号集中到 10:30 后，由分诊护士每 15 分钟检查一次积压。",
         ), analyst)
     print("followup seed ok: confirmed=FU-1116-05, baseline_p90=49.0, comparison_p90=27.6, target_p90=35")
+    seed_claim_demo(db, analyst, reviewer, admin)
+
+
+def seed_claim_demo(db, analyst, reviewer, admin):
+    """演示时段占用、撤回留档与同窗口多份报告的完整链路（幂等）。"""
+    if db.scalar(select(ImprovementEvaluationHistory.id)):
+        print("claim demo seed skipped: history already exists")
+        return
+    from src.schemas import ImplementationAction
+    from src.services.improvements import implement_improvement
+
+    base_slot = seed_window(db, analyst, 12, [22, 26, 32, 52])
+    base_report = seed_report(db, analyst, reviewer, base_slot, "呼吸内科加开窗 · 占用演示基线")
+    first = db.scalar(select(WaitImprovement).where(WaitImprovement.baseline_report_id == base_report.id))
+    if not first:
+        first = create_improvement(db, ImprovementCreate(
+            baseline_report_id=base_report.id,
+            anomaly_sample_code=db.scalars(select(WaitSample.sample_code)
+                                           .where(WaitSample.department_slot_id == base_slot.id)
+                                           .order_by(WaitSample.id.desc())).first(),
+            target_p90=35, action_plan="占用演示事项 A：高峰时段增开分诊台。",
+        ), analyst)
+
+    second_slot = seed_window(db, analyst, 13, [24, 27, 33, 49])
+    second_report = seed_report(db, analyst, reviewer, second_slot, "呼吸内科加开窗 · 占用演示基线二")
+    second = db.scalar(select(WaitImprovement).where(WaitImprovement.baseline_report_id == second_report.id))
+    if not second:
+        second = create_improvement(db, ImprovementCreate(
+            baseline_report_id=second_report.id,
+            anomaly_sample_code=db.scalars(select(WaitSample.sample_code)
+                                           .where(WaitSample.department_slot_id == second_slot.id)
+                                           .order_by(WaitSample.id.desc())).first(),
+            target_p90=34, action_plan="占用演示事项 B：复诊预约错峰 15 分钟。",
+        ), analyst)
+
+    target_slot = seed_window(db, analyst, 18, [12, 14, 18, 24])
+    first_version = seed_report(db, analyst, reviewer, target_slot, "呼吸内科加开窗 · 复测首版")
+    redo_version = seed_report(db, analyst, reviewer, target_slot, "呼吸内科加开窗 · 复测重做版")
+
+    for row in (first, second):
+        if row.status.value == "planned":
+            implement_improvement(db, row.id, ImplementationAction(
+                implemented_on=date(2026, 11, 14), implementation_note="按演示方案完成排班调整。",
+            ), admin)
+
+    evaluate_improvement(db, first.id, EvaluationAction(
+        comparison_report_id=first_version.id, evaluation_note="首版复测 P90 达标，先予验收。",
+    ), reviewer)
+    withdraw_evaluation(db, first.id, WithdrawalAction(
+        withdrawal_note="首版样本需要补录核对，撤回验收并保留原结论。",
+    ), reviewer)
+    evaluate_improvement(db, second.id, EvaluationAction(
+        comparison_report_id=redo_version.id, evaluation_note="使用重做报告验收，占用同一门诊时段。",
+    ), reviewer)
+    print(
+        "claim demo seed ok: history_rows=", len(list_evaluation_history(db)),
+        "target_slot_claimed=", db.scalar(select(ImprovementSlotClaim.id).where(
+            ImprovementSlotClaim.department_slot_id == target_slot.id)) is not None,
+    )
 
 
 def seed_report(db, analyst, reviewer, slot, title):

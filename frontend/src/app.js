@@ -5,7 +5,7 @@ import { recoveryViews } from './recovery.js';
 const API = '/api';
 const hashPage = () => location.hash.slice(1).split('/')[0] || 'dashboard';
 const focusId = () => Number(location.hash.split('/')[1]) || null;
-const state = { token: localStorage.getItem('clinic_token'), user: JSON.parse(localStorage.getItem('clinic_user') || 'null'), page: hashPage(), slots: [], samples: [], reports: [], attendance: [], improvements: [], releases: null, recoveries: null, summary: null };
+const state = { token: localStorage.getItem('clinic_token'), user: JSON.parse(localStorage.getItem('clinic_user') || 'null'), page: hashPage(), slots: [], samples: [], reports: [], attendance: [], improvements: [], slotBoard: null, evaluationHistory: [], releases: null, recoveries: null, summary: null };
 const roleNames = { analyst: '分析专员', department_reviewer: '科室复核员', operations_admin: '运营管理员' };
 const sampleNames = { booked:'已预约', checked_in:'已签到', called:'已叫号', completed:'已完成', needs_review:'待复核' };
 const reportNames = { draft:'草稿', under_review:'待科室复核', reviewed:'已复核', archived:'已归档' };
@@ -29,7 +29,16 @@ function shell(content, title, subtitle) {
 }
 function canEdit() { return ['analyst','operations_admin'].includes(state.user?.role); }
 function canGenerate() { return ['analyst','operations_admin'].includes(state.user?.role); }
-async function loadAll() { [state.summary, state.slots, state.samples, state.reports, state.attendance, state.improvements] = await Promise.all([api('/dashboard/summary'), api('/slots'), api('/samples'), api('/reports'), api('/attendance-exceptions'), api('/improvements')]); }
+async function loadAll() {
+  const base = [api('/dashboard/summary'), api('/slots'), api('/samples'), api('/reports'), api('/attendance-exceptions'), api('/improvements')];
+  if (state.page === 'improvements') {
+    base.push(api('/improvement-slot-claims'), api('/improvement-evaluation-history'));
+    const [summary, slots, samples, reports, attendance, improvements, slotBoard, evaluationHistory] = await Promise.all(base);
+    Object.assign(state, { summary, slots, samples, reports, attendance, improvements, slotBoard, evaluationHistory });
+    return;
+  }
+  [state.summary, state.slots, state.samples, state.reports, state.attendance, state.improvements] = await Promise.all(base);
+}
 
 function renderDashboard() {
   const s = state.summary || {};

@@ -159,6 +159,74 @@ class EvaluationAction(BaseModel):
     evaluation_note: Evidence
 
 
+class WithdrawalAction(BaseModel):
+    withdrawal_note: Evidence
+
+
+class SlotReportOption(BaseModel):
+    id: int
+    report_code: str
+    title: str
+    status: ReportStatus
+    p90_minutes: float | None
+    sample_count: int
+    created_at: datetime
+
+
+class AvailableSlotOut(BaseModel):
+    slot_id: int
+    department_name: str
+    slot_date: date
+    slot_label: str
+    start_time: time
+    end_time: time
+    reports: list[SlotReportOption]
+
+
+class SlotClaimOut(BaseModel):
+    id: int
+    improvement_id: int
+    department_slot_id: int
+    report_id: int
+    claimed_by: int
+    claimed_by_name: str
+    claimed_at: datetime
+    department_name: str
+    slot_date: date
+    slot_label: str
+    start_time: time
+    end_time: time
+    report_code: str
+    report_title: str
+    report_p90: float | None
+    improvement_action_plan: str
+    improvement_status: ImprovementStatus
+
+
+class EvaluationHistoryOut(BaseModel):
+    id: int
+    improvement_id: int
+    comparison_report_id: int
+    comparison_p90: float
+    evaluation_note: str
+    evaluated_by: int
+    evaluated_by_name: str
+    evaluated_at: datetime
+    withdrawal_note: str
+    withdrawn_by: int
+    withdrawn_by_name: str
+    withdrawn_at: datetime
+    department_name: str
+    slot_date: date
+    slot_label: str
+    report_code: str
+    report_title: str
+    outcome: Literal["met", "missed"]
+    baseline_p90: float
+    target_p90: float
+    improvement_action_plan: str
+
+
 class ImprovementOut(ImprovementCreate):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -176,3 +244,5 @@ class ImprovementOut(ImprovementCreate):
     evaluation_note: str | None
     outcome: Literal["met", "missed"] | None
     p90_change: float | None
+    active_claim_id: int | None = None
+    withdrawn_count: int = 0

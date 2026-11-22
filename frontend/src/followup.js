@@ -103,14 +103,49 @@ export function followupViews({ state, api, shell, esc, fmtDate, openModal, toas
       const outcome = row.outcome ? `<span class="status status-${row.outcome === 'met' ? 'green' : 'orange'}">${outcomeLabel}</span>` : '';
       const stats = [['基线 P90', row.baseline_p90], ['目标 P90', row.target_p90], ['复测 P90', row.comparison_p90], ['P90 变化', row.p90_change === null ? null : `${row.p90_change > 0 ? '+' : ''}${row.p90_change}`]];
       const actions = [row.status === 'planned' && isAdmin() ? button('implement', row.id, '记录措施实施', 'btn-primary') : '',
-        row.status === 'implemented' && canReview() && row.implemented_by !== state.user.id ? button('evaluate', row.id, '选择报告验收', 'btn-warning') : ''].join('');
+        row.status === 'implemented' && canReview() && row.implemented_by !== state.user.id ? button('evaluate', row.id, '选择报告验收', 'btn-warning') : '',
+        row.status === 'evaluated' && canReview() ? button('withdraw', row.id, '撤回验收', 'btn-secondary') : ''].join('');
       return `<article class="card panel improvement-card"><div class="panel-head"><div><div class="panel-title">${esc(report?.title)}</div><div class="panel-sub">${esc(slot?.department_name)} · ${esc(slot?.slot_label)} · ${esc(slot?.slot_date)} · 异常样本 ${esc(row.anomaly_sample_code)}</div></div><div class="followup-buttons">${badge(row.status, improvementLabels)}${outcome}</div></div>
         <div class="detail-grid">${stats.map(([label, value]) => `<div class="detail-stat"><small>${label}</small><strong>${value ?? '—'}${value === null ? '' : '<small>分钟</small>'}</strong></div>`).join('')}</div>
-        <dl class="followup-details"><dt>改善措施</dt><dd>${esc(row.action_plan)}</dd>${row.implemented_on ? `<dt>实施记录</dt><dd>${esc(row.implemented_on)} · ${esc(row.implementation_note)}</dd>` : ''}${comparison ? `<dt>验收报告</dt><dd>${esc(comparison.title)} · ${esc(comparison.report_code)}<br>${esc(row.evaluation_note)}</dd>` : ''}</dl>
+        <dl class="followup-details"><dt>改善措施</dt><dd>${esc(row.action_plan)}</dd>${row.implemented_on ? `<dt>实施记录</dt><dd>${esc(row.implemented_on)} · ${esc(row.implementation_note)}</dd>` : ''}${comparison ? `<dt>验收报告</dt><dd>${esc(comparison.title)} · ${esc(comparison.report_code)}<br>${esc(row.evaluation_note)}</dd>` : ''}${row.withdrawn_count ? `<dt>撤回记录</dt><dd>已撤回 ${row.withdrawn_count} 次，原结论保留在下方「验收撤回记录」。</dd>` : ''}</dl>
         ${actions ? `<div class="followup-card-actions">${actions}</div>` : ''}</article>`;
     }).join('');
-    return shell(`<section class="followup-overview">${overview}</section><section class="followup-cards">${cards || '<div class="card empty">暂无改善事项。请从含异常样本的已复核报告立项。</div>'}</section><a class="btn btn-secondary followup-link" href="#reports">查看复盘报告</a>`,
-    '候诊改善追踪', '从长尾样本立项，用措施实施后同科室、同窗口的复测 P90 验收。');
+    return shell(`<section class="followup-overview">${overview}</section>${renderSlotBoard()}<section class="followup-cards">${cards || '<div class="card empty">暂无改善事项。请从含异常样本的已复核报告立项。</div>'}</section><a class="btn btn-secondary followup-link" href="#reports">查看复盘报告</a>`,
+    '候诊改善追踪', '从长尾样本立项，用措施实施后同科室、同窗口的复测 P90 验收；同一门诊时段同时只能被一项改善占用。');
+  }
+
+  function renderSlotBoard() {
+    const board = state.slotBoard;
+    if (!board) return '';
+    const claimRows = board.claims.map(item => `<tr>
+      <td><b>${esc(item.department_name)}</b><div class="muted">${esc(item.slot_date)} · ${esc(item.slot_label)} · ${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}</div></td>
+      <td>${esc(item.report_title)}<div class="muted">${esc(item.report_code)} · P90 ${item.report_p90 ?? '-'} 分钟</div></td>
+      <td>改善 #${item.improvement_id}<div class="muted">${esc(item.improvement_action_plan)}</div></td>
+      <td>${esc(item.claimed_by_name)}<div class="muted">${fmtDate(item.claimed_at)}</div></td>
+    </tr>`).join('');
+    const availableRows = board.available_slots.map(item => `<tr>
+      <td><b>${esc(item.department_name)}</b><div class="muted">${esc(item.slot_date)} · ${esc(item.slot_label)}</div></td>
+      <td>${item.reports.map(report => `<div>${esc(report.report_code)} · ${esc(report.title)}<span class="muted">（P90 ${report.p90_minutes ?? '-'} 分钟 · ${report.sample_count} 条）</span></div>`).join('')}</td>
+    </tr>`).join('');
+    const historyRows = (state.evaluationHistory || []).map(item => `<tr>
+      <td>改善 #${item.improvement_id}<div class="muted">${esc(item.improvement_action_plan)}</div></td>
+      <td><b>${esc(item.department_name)}</b><div class="muted">${esc(item.slot_date)} · ${esc(item.slot_label)}</div></td>
+      <td>${esc(item.report_title)}<div class="muted">${esc(item.report_code)} · 复测 P90 ${item.comparison_p90} 分钟</div></td>
+      <td><span class="status status-${item.outcome === 'met' ? 'green' : 'orange'}">${item.outcome === 'met' ? '目标达成' : '目标未达成'}</span><div class="muted followup-note">验收：${esc(item.evaluation_note)}</div></td>
+      <td>${esc(item.evaluated_by_name)}<div class="muted">${fmtDate(item.evaluated_at)}</div></td>
+      <td>${esc(item.withdrawn_by_name)}<div class="muted followup-note">${esc(item.withdrawal_note)}</div><div class="muted">${fmtDate(item.withdrawn_at)}</div></td>
+    </tr>`).join('');
+    return `<section class="card page-card followup-board"><div class="panel-title">门诊时段占用看板</div>
+      <div class="panel-sub">验收认领的是报告对应的门诊时段；撤回后时段回到可选清单，原结论进入撤回记录。</div>
+      <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>被占用门诊时段</th><th>占用依据报告</th><th>占用方改善事项</th><th>验收人 / 时间</th></tr></thead>
+      <tbody>${claimRows || '<tr><td colspan="4" class="empty">当前没有被占用的时段。</td></tr>'}</tbody></table></div>
+      <div class="panel-title" style="margin-top:20px">可选门诊时段</div>
+      <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>门诊时段</th><th>可用于验收的报告</th></tr></thead>
+      <tbody>${availableRows || '<tr><td colspan="2" class="empty">暂无可选时段；请先生成实施日后的合格报告。</td></tr>'}</tbody></table></div>
+      <div class="panel-title" style="margin-top:20px">验收撤回记录</div>
+      <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>改善事项</th><th>原门诊时段</th><th>原验收报告</th><th>原结论</th><th>验收人 / 时间</th><th>撤回人 / 意见</th></tr></thead>
+      <tbody>${historyRows || '<tr><td colspan="6" class="empty">暂无撤回记录。</td></tr>'}</tbody></table></div>
+    </section>`;
   }
 
   const actions = {
@@ -127,11 +162,13 @@ export function followupViews({ state, api, shell, esc, fmtDate, openModal, toas
       '确认实施', payload => post(`/improvements/${id}/implement`, payload), '已登记实施，等待复测验收'),
     evaluate: async id => {
       const reports = await api(`/improvements/${id}/comparisons`);
-      if (!reports.length) return toast('暂无合格的实施后复测报告。请生成报告并完成复核。');
+      if (!reports.length) return toast('暂无合格且未被占用的实施后复测报告。请生成报告并完成复核。');
       const options = reports.map(report => `<option value="${report.id}">${esc(slotFor(report.department_slot_id)?.slot_date)} · ${esc(report.title)} · P90 ${report.p90_minutes} 分钟 · ${report.sample_count} 条</option>`);
-      form('验收候诊改善', `<label class="form-field followup-field">复测报告<select name="comparison_report_id">${options.join('')}</select></label>${note('evaluation_note', '验收意见')}`,
-        '提交验收', payload => post(`/improvements/${id}/evaluate`, { ...payload, comparison_report_id: Number(payload.comparison_report_id) }), '已保存复测和验收结论');
+      form('验收候诊改善', `<p class="muted">提交后将占用所选报告对应的门诊时段；同一时段同时只能通过一项改善验收。</p><label class="form-field followup-field">复测报告<select name="comparison_report_id">${options.join('')}</select></label>${note('evaluation_note', '验收意见')}`,
+        '提交验收', payload => post(`/improvements/${id}/evaluate`, { ...payload, comparison_report_id: Number(payload.comparison_report_id) }), '已保存复测和验收结论，并占用对应门诊时段'),
     },
+    withdraw: id => form('撤回验收', `<p class="muted">撤回后本事项回到待验收，原验收结论将保留在撤回记录中，对应门诊时段重新开放给其他事项选择。</p>${note('withdrawal_note', '撤回原因')}`,
+      '确认撤回', payload => post(`/improvements/${id}/withdraw`, payload), '验收已撤回，原结论已留档，时段已释放'),
   };
 
   function attendanceDecision(id, decision, label) {

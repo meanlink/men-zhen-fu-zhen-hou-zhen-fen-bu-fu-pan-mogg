@@ -191,3 +191,45 @@ class WaitImprovement(Base):
         if self.comparison_p90 is None:
             return None
         return round(self.comparison_p90 - self.baseline_p90, 1)
+
+
+class ImprovementSlotClaim(Base):
+    """改善验收对门诊时段的活跃占用。一个时段同时只能被一个改善事项占用。"""
+
+    __tablename__ = "improvement_slot_claims"
+    __table_args__ = (
+        UniqueConstraint("department_slot_id", name="uq_slot_claim_slot"),
+        UniqueConstraint("improvement_id", name="uq_slot_claim_improvement"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    improvement_id: Mapped[int] = mapped_column(
+        ForeignKey("wait_improvements.id", ondelete="CASCADE"), index=True)
+    department_slot_id: Mapped[int] = mapped_column(
+        ForeignKey("department_slots.id", ondelete="CASCADE"), index=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("review_reports.id"))
+    claimed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    claimed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    improvement = relationship("WaitImprovement")
+    slot = relationship("DepartmentSlot")
+    report = relationship("ReviewReport")
+
+
+class ImprovementEvaluationHistory(Base):
+    """撤回验收时保留的原结论快照，供后续查阅。"""
+
+    __tablename__ = "improvement_evaluation_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    improvement_id: Mapped[int] = mapped_column(
+        ForeignKey("wait_improvements.id", ondelete="CASCADE"), index=True)
+    comparison_report_id: Mapped[int] = mapped_column(ForeignKey("review_reports.id"))
+    comparison_p90: Mapped[float] = mapped_column(Float)
+    evaluation_note: Mapped[str] = mapped_column(String(500))
+    evaluated_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime)
+    withdrawal_note: Mapped[str] = mapped_column(String(500))
+    withdrawn_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    withdrawn_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    improvement = relationship("WaitImprovement")
+    comparison_report = relationship("ReviewReport")

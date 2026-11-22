@@ -16,7 +16,7 @@
 - 超过科室阈值自动进入科室复核
 - 缺签到或叫号的报告拒绝发布
 - 未到诊核销由分析专员发起，另一位复核人员确认或驳回。新报告保留核销排除快照。
-- 候诊改善追踪以报告中的异常样本为依据，记录实施措施并用同窗口的后续 P90 验收。
+- 候诊改善追踪以报告中的异常样本为依据，记录实施措施并用同窗口的后续 P90 验收。验收认领报告对应的门诊时段，同一时段同时只能被一项改善占用；撤回验收会保留原结论快照、释放时段，且旧撤回重试不会误释放已被其他事项认领的时段。
 - 临时容量按支援窗口审批、发放加号并保留台账。超阈值候诊可进入科室分流，叫号后记录处置耗时。
 - JWT 三角色权限、审计日志、Redis 限流和 worker 心跳
 
@@ -46,6 +46,16 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 4. 分析专员可从含异常样本的已复核报告创建改善事项。扩展 seed 预置一条「呼吸内科加开窗 · 长尾基线」改善事项，基线 P90 为 49 分钟，目标为 35 分钟。
 5. 运营管理员在「候诊改善追踪」登记实施日期 `2026-11-17` 和执行说明。
 6. 科室复核员选择「改善复测」作为验收报告。其 P90 为 27.6 分钟，较基线下降 21.4 分钟。基线和对照均需至少 3 条有效样本，对照须在实施日期之后且来自同科室、同名同起止时间的窗口。
+7. 在「候诊改善追踪」页底部查看「门诊时段占用看板」：被占用时段、占用方改善事项、可选时段与「验收撤回记录」。seed 预置一条完整链路——事项 A 用复测首版验收后撤回（原结论留档），事项 B 再用同一时段的重做报告验收并持有占用。
+8. 对任一已验收事项点击「撤回验收」并填写原因：事项回到待验收，当前结论清空但快照保留在撤回记录中，时段重新出现在可选清单。之后可用同窗口的重做报告再次验收；若该时段已被其他事项认领，候选列表不会再出现该时段的报告，强行提交会被后端唯一约束拒绝（409）。
+
+### 时段占用与撤回规则
+
+- 同一门诊时段重做报告后，每份报告都是独立证据，可分别支撑不同改善事项的成效，但同一时刻该时段只能有一个活跃占用方。
+- 验收写入的占用以门诊时段（而非报告）为键，数据库 `uq_slot_claim_slot` 唯一索引保证并发验收只有一项能通过；`uq_slot_claim_improvement` 保证一个事项同时只占用一个时段。
+- 撤回只按 `improvement_id` 条件删除本事项的占用，因此重复投递的旧撤回请求不会释放已被其他事项重新认领的时段；已回到待验收的事项再次调用撤回会返回 409。
+- 每次撤回把原对照报告、复测 P90、验收意见、验收人与时间快照到 `improvement_evaluation_history`，永久保留供查阅。
+- 接口：`GET /improvement-slot-claims`（占用方 + 可选时段）、`GET /improvement-evaluation-history`（撤回记录）、`POST /improvements/{id}/withdraw`（撤回验收）。
 
 ## 临时容量与候诊处置演示
 
@@ -74,9 +84,10 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 - `backend/src/services/analytics.py` 候诊分布、分位数、MAD 算法
 - `backend/src/services/workflow.py` 主流程和异常规则
 - `backend/src/services/attendance.py` 预约核销、角色分离与报表口径
-- `backend/src/services/improvements.py` 基线、实施和候诊复测验收规则
+- `backend/src/services/improvements.py` 基线、实施、候诊复测验收、门诊时段占用与撤回留档规则
 - `frontend/src/app.js` 页面路由和业务交互
-- `frontend/src/followup.js` 核销与改善页面、样本和报告入口
+- `frontend/src/followup.js` 核销与改善页面、时段占用看板、撤回记录、样本和报告入口
+- `backend/tests/test_improvement_claims.py` 时段占用、并发唯一约束、撤回留档与旧撤回重试的端到端测试
 - `backend/src/capacity_models.py` 与 `backend/src/recovery_models.py` 加号批次、发放记录和候诊处置
 - `backend/src/operations_schemas.py` 运营工作流输入及回执
 - `backend/src/services/capacity.py` 批次审批、加号发放及收回
