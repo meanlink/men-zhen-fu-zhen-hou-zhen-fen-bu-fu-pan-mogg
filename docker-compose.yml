@@ -1,0 +1,102 @@
+name: clinic-wait-distribution
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-clinic-wait-distribution}-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clinic_wait}
+      POSTGRES_USER: ${POSTGRES_USER:-clinic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clinic_password}
+    ports:
+      - "${DB_PORT:-17740}:5432"
+    volumes:
+      - clinic_wait_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clinic} -d ${POSTGRES_DB:-clinic_wait}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-clinic-wait-distribution}-redis
+    ports:
+      - "${REDIS_PORT:-16340}:6379"
+    volumes:
+      - clinic_wait_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-clinic-wait-distribution}-backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-clinic}:${POSTGRES_PASSWORD:-clinic_password}@db:5432/${POSTGRES_DB:-clinic_wait}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-clinic-wait-demo-secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:18240}
+      ARTIFACT_DIR: /shared
+    ports:
+      - "${BACKEND_PORT:-19240}:8000"
+    volumes:
+      - clinic_wait_shared:/shared
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  worker:
+    build:
+      context: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-clinic-wait-distribution}-worker
+    command: ["python", "-m", "src.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-clinic}:${POSTGRES_PASSWORD:-clinic_password}@db:5432/${POSTGRES_DB:-clinic_wait}
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_DIR: /shared
+    volumes:
+      - clinic_wait_shared:/shared
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /shared/worker-heartbeat && test $$(($$(date +%s) - $$(stat -c %Y /shared/worker-heartbeat))) -lt 30"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-clinic-wait-distribution}-frontend
+    ports:
+      - "${FRONTEND_PORT:-18240}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  clinic_wait_db:
+    name: ${CLINIC_DB_VOLUME:-clinic_wait_db}
+  clinic_wait_redis:
+    name: ${CLINIC_REDIS_VOLUME:-clinic_wait_redis}
+  clinic_wait_shared:
+    name: ${CLINIC_SHARED_VOLUME:-clinic_wait_shared}
